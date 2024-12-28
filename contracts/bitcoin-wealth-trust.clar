@@ -277,3 +277,101 @@
     ))
 )
 
+
+;; Update claim-milestone function status check
+(define-public (claim-milestone (heir principal) (milestone-id uint))
+    (let (
+        (heir-data (unwrap! (get-heir-info heir) ERR-NOT-AUTHORIZED))
+        (milestone (unwrap! (get-milestone milestone-id) ERR-MILESTONE-NOT-FOUND))
+    )
+    (begin
+        (asserts! (is-active) ERR-NOT-ACTIVE)
+        (asserts! (is-eq tx-sender heir) ERR-NOT-AUTHORIZED)
+        (asserts! (not (get completed milestone)) ERR-MILESTONE-ALREADY-COMPLETED)
+        (asserts! (validate-status (get status heir-data)) ERR-INVALID-STATUS)
+        (asserts! (is-eq (get status heir-data) "active") ERR-NOT-ACTIVE)
+        (asserts! (check-age-requirement heir (get age-requirement milestone)) ERR-INVALID-AGE)
+        (asserts! (get-vesting-status heir) ERR-INVALID-TIME)
+
+        ;; Check guardian approval if required
+        (asserts! (if (get requires-guardian milestone)
+            (match (get-guardian-approval heir milestone-id)
+                approval (get approved approval)
+                false)
+            true)
+            ERR-NOT-AUTHORIZED)
+
+        ;; Check deadline if exists
+        (asserts! (validate-deadline (get deadline milestone)) ERR-INVALID-DEADLINE)
+
+        ;; Calculate final reward with bonus
+        (let (
+            (base-reward (get reward-amount milestone))
+            (bonus-reward (/ (* base-reward (- (get bonus-multiplier milestone) u100)) u100))
+            (education-bonus (get education-bonus heir-data))
+            (total-reward (+ base-reward bonus-reward education-bonus))
+        )
+
+        (asserts! (<= (+ (get claimed-amount heir-data) total-reward)
+                     (get total-allocation heir-data))
+                 ERR-INSUFFICIENT-BALANCE)
+
+        ;; Verify contract has sufficient balance
+        (asserts! (>= (stx-get-balance (as-contract tx-sender)) total-reward)
+                 ERR-INSUFFICIENT-BALANCE)
+
+        ;; Update milestone status
+        (map-set milestones milestone-id (merge milestone { completed: true }))
+
+        ;; Update heir's claimed amount and last activity
+        (map-set heirs heir (merge heir-data { 
+            claimed-amount: (+ (get claimed-amount heir-data) total-reward),
+            last-activity: stacks-block-height
+        }))
+
+        ;; Transfer reward
+        (as-contract
+            (stx-transfer? total-reward tx-sender heir)))
+    ))
+)
+
+(define-public (set-emergency-contact (new-contact principal))
+    (begin
+        (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
+        (var-set emergency-contact new-contact)
+        (ok true)
+    )
+)
+
+(define-public (update-vesting-period (new-period uint))
+    (begin
+        (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
+        (var-set minimum-vesting-period new-period)
+        (ok true)
+    )
+)
+
+(define-public (pause-contract)
+    (begin
+        (asserts! (or (is-contract-owner) 
+                     (is-eq tx-sender (var-get emergency-contact)))
+                 ERR-NOT-AUTHORIZED)
+        (var-set active false)
+        (ok true)
+    )
+)
+
+(define-public (resume-contract)
+    (begin
+        (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
+        (var-set active true)
+        (ok true)
+    )
+)
+
+;; Initialize contract
+(begin
+    (var-set contract-owner tx-sender)
+    (var-set active true)
+    (var-set emergency-contact tx-sender)
+)
