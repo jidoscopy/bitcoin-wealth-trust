@@ -198,3 +198,82 @@
         (ok true)
     )
 )
+
+
+(define-public (update-guardian (heir principal) (new-guardian principal))
+    (let (
+        (heir-data (unwrap! (get-heir-info heir) ERR-NOT-AUTHORIZED))
+    )
+    (begin
+        (asserts! (is-guardian-or-owner heir) ERR-NOT-AUTHORIZED)
+        (asserts! (not (is-eq new-guardian heir)) ERR-SELF-GUARDIAN)
+        (map-set heirs heir (merge heir-data { 
+            guardian: (some new-guardian),
+            last-activity: stacks-block-height 
+        }))
+        (ok true)
+    ))
+)
+
+(define-public (add-education-bonus (heir principal) (bonus-amount uint))
+    (let (
+        (heir-data (unwrap! (get-heir-info heir) ERR-NOT-AUTHORIZED))
+    )
+    (begin
+        (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
+        (asserts! (> bonus-amount u0) ERR-INVALID-AMOUNT)
+
+        (map-set heirs heir (merge heir-data { 
+            education-bonus: (+ (get education-bonus heir-data) bonus-amount),
+            last-activity: stacks-block-height
+        }))
+        (ok true)
+    ))
+)
+
+(define-public (add-milestone (milestone-id uint) 
+                            (description (string-ascii 100))
+                            (reward-amount uint)
+                            (age-requirement uint)
+                            (deadline (optional uint))
+                            (bonus-multiplier uint)
+                            (requires-guardian bool))
+    (begin
+        (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
+        (asserts! (is-active) ERR-NOT-ACTIVE)
+        (asserts! (is-none (get-milestone milestone-id)) ERR-ALREADY-INITIALIZED)
+        (asserts! (validate-age-requirement age-requirement) ERR-INVALID-AGE)
+        (asserts! (validate-bonus-multiplier bonus-multiplier) ERR-INVALID-BONUS)
+        (asserts! (validate-deadline deadline) ERR-INVALID-DEADLINE)
+        (asserts! (> reward-amount u0) ERR-INVALID-AMOUNT)
+
+        (map-set milestones milestone-id {
+            description: description,
+            reward-amount: reward-amount,
+            age-requirement: age-requirement,
+            completed: false,
+            deadline: deadline,
+            bonus-multiplier: bonus-multiplier,
+            requires-guardian: requires-guardian
+        })
+
+        (ok true)
+    )
+)
+
+(define-public (approve-milestone (heir principal) (milestone-id uint))
+    (let (
+        (heir-data (unwrap! (get-heir-info heir) ERR-NOT-AUTHORIZED))
+        (milestone (unwrap! (get-milestone milestone-id) ERR-MILESTONE-NOT-FOUND))
+    )
+    (begin
+        (asserts! (is-guardian-or-owner heir) ERR-NOT-AUTHORIZED)
+        (asserts! (get requires-guardian milestone) ERR-NOT-AUTHORIZED)
+
+        (map-set guardian-approvals 
+            { heir: heir, milestone-id: milestone-id }
+            { approved: true, timestamp: stacks-block-height })
+        (ok true)
+    ))
+)
+
