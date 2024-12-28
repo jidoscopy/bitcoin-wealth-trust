@@ -68,3 +68,133 @@
     { heir: principal, milestone-id: uint }
     { approved: bool, timestamp: uint }
 )
+
+
+;; Helper functions for validation
+(define-private (validate-birth-height (birth-height uint))
+    (and 
+        (>= birth-height u0)
+        (<= birth-height stacks-block-height))
+)
+
+(define-private (validate-allocation (amount uint))
+    (and 
+        (>= amount MINIMUM_ALLOCATION)
+        (<= amount (stx-get-balance tx-sender)))
+)
+
+(define-private (validate-bonus-multiplier (multiplier uint))
+    (and 
+        (>= multiplier u100)
+        (<= multiplier MAXIMUM-BONUS_MULTIPLIER))
+)
+
+(define-private (validate-age-requirement (age uint))
+    (and 
+        (>= age MINIMUM-AGE-REQUIREMENT)
+        (<= age MAXIMUM-AGE-REQUIREMENT))
+)
+
+(define-private (validate-deadline (deadline-height (optional uint)))
+    (match deadline-height
+        height (> height stacks-block-height)
+        true)
+)
+
+(define-private (validate-status (status (string-ascii 9))) ;; Updated parameter type
+    (is-some (index-of VALID-STATUS-VALUES status))
+)
+
+;; Private utility functions
+(define-private (is-contract-owner)
+    (is-eq tx-sender (var-get contract-owner))
+)
+
+(define-private (is-active)
+    (var-get active)
+)
+
+(define-private (is-guardian-or-owner (heir principal))
+    (match (get-heir-info heir)
+        heir-data (or 
+            (is-contract-owner)
+            (match (get guardian heir-data)
+                guardian (is-eq tx-sender guardian)
+                false
+            ))
+        false
+    )
+)
+
+(define-private (safe-transfer (amount uint) (sender principal) (recipient principal))
+    (match (as-contract (stx-transfer? amount sender recipient))
+        success (ok true)
+        error (err ERR-TRANSFER-FAILED))
+)
+
+;; Read-only functions
+(define-read-only (get-heir-info (heir principal))
+    (map-get? heirs heir)
+)
+
+(define-read-only (get-milestone (milestone-id uint))
+    (map-get? milestones milestone-id)
+)
+
+(define-read-only (calculate-age (birth-height uint))
+    (if (validate-birth-height birth-height)
+        (if (>= stacks-block-height birth-height)
+            (/ (- stacks-block-height birth-height) BLOCKS_PER_DAY)
+            u0)
+        u0)
+)
+
+(define-read-only (get-guardian-approval (heir principal) (milestone-id uint))
+    (map-get? guardian-approvals { heir: heir, milestone-id: milestone-id })
+)
+
+(define-read-only (get-vesting-status (heir principal))
+    (match (get-heir-info heir)
+        heir-data (>= (- stacks-block-height (get vesting-start heir-data)) 
+                     (var-get minimum-vesting-period))
+        false
+    )
+)
+
+(define-private (check-age-requirement (heir principal) (required-age uint))
+    (match (get-heir-info heir)
+        heir-data (>= (calculate-age (get birth-height heir-data)) required-age)
+        false
+    )
+)
+
+;; Update add-heir function
+(define-public (add-heir (heir principal) 
+                        (birth-height uint) 
+                        (allocation uint)
+                        (guardian (optional principal)))
+    (begin
+        (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
+        (asserts! (is-active) ERR-NOT-ACTIVE)
+        (asserts! (is-none (get-heir-info heir)) ERR-ALREADY-INITIALIZED)
+        (asserts! (validate-birth-height birth-height) ERR-INVALID-BIRTH-HEIGHT)
+        (asserts! (validate-allocation allocation) ERR-ZERO-ALLOCATION)
+        (asserts! (match guardian 
+            g (not (is-eq g heir))
+            true) 
+            ERR-SELF-GUARDIAN)
+
+        (map-set heirs heir {
+            birth-height: birth-height,
+            total-allocation: allocation,
+            claimed-amount: u0,
+            status: "active",  ;; This is now within 9 characters
+            guardian: guardian,
+            vesting-start: stacks-block-height,
+            education-bonus: u0,
+            last-activity: stacks-block-height
+        })
+
+        (ok true)
+    )
+)
